@@ -43,11 +43,81 @@ const PD_UNITS = {
     bosh: '—'
 };
 
-// Yordamchi raqam formatlash funksiyasi
-const f = (n) => {
+// Yordamchi raqam formatlash funksiyasi (bo'shliq - probel bilan ajratish)
+const f = (n, maxDecimals = 0) => {
     if (n === null || n === undefined || isNaN(n)) return '0';
-    return Math.round(n).toLocaleString('ru-RU');
+    if (maxDecimals > 0 && n % 1 !== 0) {
+        const fixed = Number(n).toFixed(maxDecimals).replace(/\.?0+$/, '');
+        const parts = fixed.split('.');
+        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+        return parts.join('.');
+    }
+    return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 };
+
+function parseFormattedNumber(val) {
+    if (val === null || val === undefined) return 0;
+    const clean = String(val).replace(/\s+/g, '').replace(/,/g, '.');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+}
+
+// Input maydonlarida kiritish paytida real-time 1 000 000 ko'rinishida formatlash va kursorni saqlash
+function handleFormattedNumberInput(inputEl, callback, isFloat = false) {
+    const origVal = inputEl.value;
+    const selStart = inputEl.selectionStart !== null ? inputEl.selectionStart : origVal.length;
+    
+    // Kursor oldidagi raqamlarni (va nuqtani) sanab olamiz
+    const charsBeforeCursor = origVal.slice(0, selStart).replace(/[^\d.]/g, '').length;
+    
+    // Faqat raqamlar va (agar float bo'lsa) bitta nuqtani qoldiramiz
+    let clean = origVal.replace(/[^\d.,]/g, '').replace(/,/g, '.');
+    if (!isFloat) {
+        clean = clean.replace(/\./g, '');
+    } else {
+        const dotIdx = clean.indexOf('.');
+        if (dotIdx !== -1) {
+            clean = clean.slice(0, dotIdx + 1) + clean.slice(dotIdx + 1).replace(/\./g, '');
+        }
+    }
+    
+    if (clean === '') {
+        inputEl.value = '';
+        if (callback) callback(0);
+        return;
+    }
+    
+    // Butun qismini har 3 ta raqamdan keyin probel bilan ajratamiz
+    const parts = clean.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const formatted = parts.join('.');
+    
+    inputEl.value = formatted;
+    
+    // Kursorni kiritilgan raqamdan keyingi to'g'ri pozitsiyaga qo'yish
+    let newCursorPos = 0;
+    if (charsBeforeCursor === 0) {
+        newCursorPos = 0;
+    } else {
+        let countedChars = 0;
+        for (let i = 0; i < formatted.length; i++) {
+            if (/[\d.]/.test(formatted[i])) {
+                countedChars++;
+            }
+            if (countedChars >= charsBeforeCursor) {
+                newCursorPos = i + 1;
+                break;
+            }
+        }
+        if (countedChars < charsBeforeCursor) newCursorPos = formatted.length;
+    }
+    try {
+        inputEl.setSelectionRange(newCursorPos, newCursorPos);
+    } catch (err) {}
+    
+    const num = parseFloat(clean) || 0;
+    if (callback) callback(num);
+}
 
 const $ = (s) => document.querySelector(s);
 
@@ -91,7 +161,7 @@ function applyOperatorPlans() {
         const isSel = isOpSelected(e);
         e.plan = isSel ? indPlan : 0;
         const inp = document.getElementById(`emp-plan-${e.id}`);
-        if (inp) inp.value = e.plan;
+        if (inp) inp.value = f(e.plan);
     });
 }
 
@@ -216,7 +286,7 @@ function applyManagerPlans() {
         const isSel = isMenSelected(e);
         e.plan = isSel ? indPlan : 0;
         const inp = document.getElementById(`emp-plan-${e.id}`);
-        if (inp) inp.value = e.plan;
+        if (inp) inp.value = f(e.plan);
     });
 }
 
@@ -303,7 +373,7 @@ function onMenCheckboxChange(empId, empUid, isChecked) {
 
 // Ishlab chiqarish hajmini qo'lda kiritish va qayta hisoblash funksiyalari
 function onProductionVolumeInput(empId, val) {
-    const num = Math.max(0, parseFloat(val) || 0);
+    const num = typeof val === 'number' ? Math.max(0, val) : Math.max(0, parseFloat(val) || 0);
     state.manual_production_facts[String(empId)] = num;
 
     if (state.production_summary) {
@@ -565,9 +635,9 @@ function renderPlan() {
                 <td><span class="chip" style="font-weight:600;">${polyLabel} polyasi</span></td>
                 <td>${f(c.prev_month_volume)}</td>
                 <td><input type="number" class="styled-input" style="width:75px" value="${c.growth_percent}" onchange="updateCatGrowth(${i}, this.value)"></td>
-                <td><input type="number" class="styled-input" style="width:90px" value="${c.plan}" onchange="state.categories[${i}].plan=+this.value; draw();"></td>
+                <td><input type="text" inputmode="numeric" class="styled-input" style="width:95px; text-align:right;" value="${f(c.plan)}" oninput="handleFormattedNumberInput(this, v => { state.categories[${i}].plan=v; draw(); })"></td>
                 <td><b style="color:var(--pr);">${f(c.fact)}</b></td>
-                <td><input type="number" class="styled-input" style="width:100px" value="${c.tarif}" onchange="state.categories[${i}].tarif=+this.value; draw();"></td>
+                <td><input type="text" inputmode="numeric" class="styled-input" style="width:105px; text-align:right;" value="${f(c.tarif)}" oninput="handleFormattedNumberInput(this, v => { state.categories[${i}].tarif=v; draw(); })"></td>
                 <td><span class="chip">${c.workers_count || 1} nafar</span></td>
             </tr>
         `;
@@ -603,7 +673,7 @@ function renderPlan() {
                 <td class="l">${e.position}</td>
                 <td>
                     ${e.group === 'bosh' || e.group === 'ish' ? '—' : `
-                        <input type="number" id="emp-plan-${e.id}" class="styled-input" style="width:140px; font-weight:600;" value="${e.plan}" oninput="state.items[${idx}].plan=+this.value;">
+                        <input type="text" inputmode="numeric" id="emp-plan-${e.id}" class="styled-input" style="width:145px; font-weight:600; text-align:right;" value="${f(e.plan)}" oninput="handleFormattedNumberInput(this, v => { state.items[${idx}].plan = v; })">
                     `}
                 </td>
                 <td class="l">${deptChip}</td>
@@ -635,7 +705,7 @@ function renderPlan() {
 
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-weight:600;">
                         <span>Jami plan (so'm)</span> 
-                        <input type="number" id="inputTotalPlanOp" class="styled-input" style="width:160px; font-weight:700; font-size:14px;" value="${tp.op}" oninput="onPlanInput('op', this.value)" onchange="onPlanChange('op', this.value)">
+                        <input type="text" inputmode="numeric" id="inputTotalPlanOp" class="styled-input" style="width:175px; font-weight:700; font-size:14px; text-align:right;" value="${f(tp.op)}" oninput="handleFormattedNumberInput(this, v => onPlanInput('op', v))" onchange="onPlanChange('op', parseFormattedNumber(this.value))">
                     </label>
 
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-weight:600;">
@@ -682,7 +752,7 @@ function renderPlan() {
 
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-weight:600;">
                         <span>Jami plan (so'm)</span> 
-                        <input type="number" id="inputTotalPlanMen" class="styled-input" style="width:160px; font-weight:700; font-size:14px;" value="${tp.men}" oninput="onPlanInput('men', this.value)" onchange="onPlanChange('men', this.value)">
+                        <input type="text" inputmode="numeric" id="inputTotalPlanMen" class="styled-input" style="width:175px; font-weight:700; font-size:14px; text-align:right;" value="${f(tp.men)}" oninput="handleFormattedNumberInput(this, v => onPlanInput('men', v))" onchange="onPlanChange('men', parseFormattedNumber(this.value))">
                     </label>
 
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-weight:600;">
@@ -754,15 +824,15 @@ function renderPlan() {
                     <b class="rule-title" style="font-size:15px; color:var(--tx-main);">Ishlab chiqarish va Montaj tariflari</b>
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                         <span>ПВХ tarifi (so'm / m²)</span>
-                        <input type="number" id="inputTarifPvh" class="styled-input" style="width:125px; font-weight:700;" value="${tp.tarif_pvh || 60000}" oninput="onTarifInput('pvh', this.value)" onchange="onTarifChange('pvh', this.value)">
+                        <input type="text" inputmode="numeric" id="inputTarifPvh" class="styled-input" style="width:125px; font-weight:700; text-align:right;" value="${f(tp.tarif_pvh || 60000)}" oninput="handleFormattedNumberInput(this, v => onTarifInput('pvh', v))" onchange="onTarifChange('pvh', parseFormattedNumber(this.value))">
                     </label>
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                         <span>ТЕРМО tarifi (so'm / m²)</span>
-                        <input type="number" id="inputTarifTermo" class="styled-input" style="width:125px; font-weight:700;" value="${tp.tarif_termo || 80000}" oninput="onTarifInput('termo', this.value)" onchange="onTarifChange('termo', this.value)">
+                        <input type="text" inputmode="numeric" id="inputTarifTermo" class="styled-input" style="width:125px; font-weight:700; text-align:right;" value="${f(tp.tarif_termo || 80000)}" oninput="handleFormattedNumberInput(this, v => onTarifInput('termo', v))" onchange="onTarifChange('termo', parseFormattedNumber(this.value))">
                     </label>
                     <label style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                         <span>Монтаж tarifi (so'm / m²)</span>
-                        <input type="number" id="inputTarifMontaj" class="styled-input" style="width:125px; font-weight:700;" value="${tp.tarif_montaj || 50000}" oninput="onTarifInput('montaj', this.value)" onchange="onTarifChange('montaj', this.value)">
+                        <input type="text" inputmode="numeric" id="inputTarifMontaj" class="styled-input" style="width:125px; font-weight:700; text-align:right;" value="${f(tp.tarif_montaj || 50000)}" oninput="handleFormattedNumberInput(this, v => onTarifInput('montaj', v))" onchange="onTarifChange('montaj', parseFormattedNumber(this.value))">
                     </label>
                     <div class="note" style="margin-top:8px;">Har bir ishlab chiqarish va montaj qilingan kv.m uchun shu summa bo'yicha shaxsiy bonus hisoblanadi. 0 kv bo'lsa faqat oklad to'lanadi.</div>
                 </div>
@@ -863,14 +933,13 @@ function renderProductionRows() {
                 <td>${polyChip}</td>
                 <td>
                     <div style="display:inline-flex; align-items:center; gap:4px;">
-                        <input type="number" 
-                               step="0.01" 
-                               min="0" 
+                        <input type="text" 
+                               inputmode="decimal"
                                id="prod-fact-${p.id}" 
                                class="styled-input" 
-                               style="width:90px; font-weight:700; text-align:right; font-size:13px; color:${hasWork ? 'var(--pr)' : 'var(--tx-muted)'};" 
-                               value="${p.fact_m2}" 
-                               oninput="onProductionVolumeInput('${p.id}', this.value)"
+                               style="width:95px; font-weight:700; text-align:right; font-size:13px; color:${hasWork ? 'var(--pr)' : 'var(--tx-muted)'};" 
+                               value="${p.fact_m2 ? f(p.fact_m2, 2) : '0'}" 
+                               oninput="handleFormattedNumberInput(this, v => onProductionVolumeInput('${p.id}', v), true)"
                                title="MoySklad avtomatik qiymati: ${autoVal} m². O'zgartirish yoki qo'lda kiritish mumkin.">
                         <span class="note" style="font-weight:600;">m²</span>
                         <span id="prod-reset-wrap-${p.id}">
@@ -890,7 +959,7 @@ function renderProductionRows() {
 
 // Boshqariladigan va kursor sakramaydigan real-time kiritish funksiyalari
 function onPlanInput(grp, val) {
-    const num = parseFloat(val) || 0;
+    const num = typeof val === 'number' ? val : (parseFloat(val) || 0);
     state.total_plans[grp] = num;
 
     if (grp === 'op') {
@@ -900,7 +969,7 @@ function onPlanInput(grp, val) {
             const isSel = isOpSelected(e);
             e.plan = isSel ? indPlan : 0;
             const inp = document.getElementById(`emp-plan-${e.id}`);
-            if (inp) inp.value = e.plan;
+            if (inp) inp.value = f(e.plan);
         });
         updateOpUI();
         return;
@@ -913,7 +982,7 @@ function onPlanInput(grp, val) {
             const isSel = isMenSelected(e);
             e.plan = isSel ? indPlan : 0;
             const inp = document.getElementById(`emp-plan-${e.id}`);
-            if (inp) inp.value = e.plan;
+            if (inp) inp.value = f(e.plan);
         });
         updateMenUI();
         return;
@@ -926,7 +995,7 @@ function onPlanInput(grp, val) {
     activeItems.forEach(e => {
         e.plan = indPlan;
         const inp = document.getElementById(`emp-plan-${e.id}`);
-        if (inp) inp.value = indPlan;
+        if (inp) inp.value = f(indPlan);
     });
 }
 
@@ -977,7 +1046,7 @@ function onPlanChange(grp, val) {
 
 // Ishlab chiqarish va Montaj tariflari jonli kiritish
 function onTarifInput(cat, val) {
-    const num = parseFloat(val) || 0;
+    const num = typeof val === 'number' ? val : (parseFloat(val) || 0);
     if (cat === 'pvh') state.total_plans.tarif_pvh = num;
     else if (cat === 'termo') state.total_plans.tarif_termo = num;
     else if (cat === 'montaj') state.total_plans.tarif_montaj = num;
@@ -1117,12 +1186,13 @@ function renderCalc() {
                 <td>${factDisplay}</td>
                 <td class="${colorClass}">${percentDisplay}</td>
                 <td>
-                    <input type="number" 
+                    <input type="text" 
+                           inputmode="numeric"
                            id="emp-kpi-${e.id}" 
                            class="styled-input" 
-                           style="width:130px; font-weight:700; color:${k.bonus > 0 ? 'var(--ok)' : 'var(--tx-muted)'}; text-align:right;" 
-                           value="${k.bonus}" 
-                           oninput="onKpiBonusChange(${e.id}, this.value)"
+                           style="width:135px; font-weight:700; color:${k.bonus > 0 ? 'var(--ok)' : 'var(--tx-muted)'}; text-align:right;" 
+                           value="${f(k.bonus)}" 
+                           oninput="handleFormattedNumberInput(this, v => onKpiBonusChange(${e.id}, v))"
                            title="Avtomatik hisoblangan: ${f(auto.bonus)} so'm${isUnselected ? ' (Reja belgilanmagan)' : ''}. Ixtiyoriy o'zgartirish yoki qo'shimcha KPI kiritish mumkin.">
                 </td>
                 <td><span style="color:var(--wa); font-weight:600;">${f(e.advance)}</span></td>
@@ -1246,7 +1316,7 @@ function computeKpi(e) {
 
 // KPI bonusini joyida kiritish va real-time hisoblash
 function onKpiBonusChange(empId, val) {
-    const num = parseFloat(val) || 0;
+    const num = typeof val === 'number' ? val : (parseFloat(val) || 0);
     const item = state.items.find(i => i.id === empId);
     if (!item) return;
 
